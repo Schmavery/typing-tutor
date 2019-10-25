@@ -35,8 +35,8 @@ type state = {
 
 let setup = (env) => {
   Env.size(~width=800, ~height=600, env);
-  let font = Draw.loadFont(~filename="./monogram.fnt", ~isPixel=true, env);
-  let sprites = Sprite.load("./sprites.png", Sprite.spritesData, env);
+  let font = Draw.loadFont(~filename="./assets/monogram.fnt", ~isPixel=true, env);
+  let sprites = Sprite.load("./assets/sprites.png", Sprite.spritesData, env);
   let map = GameMap.createGrid(GameMap.mapString);
   let robots = [Robot.create(7, 4), Robot.create(9, 6)];
   {time: 0., font, sprites, map, robots, editing: None, player: Point.Float.ofIntPt(Point.create(7 * tileSize, 4 * tileSize))}

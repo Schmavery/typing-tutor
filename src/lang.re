@@ -1,5 +1,7 @@
 open Printf;
 
+module Stream = CStream;
+
 type expr =
  | App(expr, list(expr))
  | Bool(bool)
