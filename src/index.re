@@ -1,213 +1,188 @@
 open Reprocessing;
 open Printf;
+open Std;
+
+let tileSize = 32;
+
+module Robot = {
+  type t = {
+    id: int,
+    pos: Point.t(float),
+    code: Editor.t,
+    say: option(string),
+  };
+
+  let create = {
+    let counter = ref(0);
+    (x, y) => {
+      let id = counter^;
+      incr(counter);
+      {id, say: None, code: Editor.create(), pos: Point.Float.ofIntPt(Point.create(x * tileSize, y * tileSize))}
+    };
+  }
+};
 
 type state = {
   time: float,
-  lines: array(string),
-  cursor: (int, int),
+  font: fontT,
+  sprites: Sprite.t,
+  map: GameMap.t,
+  player: Point.t(float),
+  editing: option(Robot.t),
+  robots: list(Robot.t),
 };
+
 
 let setup = (env) => {
-  Env.size(~width=500, ~height=300, env);
-  {lines: [|""|], time: 0., cursor: (0, 0)}
+  Env.size(~width=800, ~height=600, env);
+  let font = Draw.loadFont(~filename="./monogram.fnt", ~isPixel=true, env);
+  let sprites = Sprite.load("./sprites.png", Sprite.spritesData, env);
+  let map = GameMap.createGrid(GameMap.mapString);
+  let robots = [Robot.create(7, 4), Robot.create(9, 6)];
+  {time: 0., font, sprites, map, robots, editing: None, player: Point.Float.ofIntPt(Point.create(7 * tileSize, 4 * tileSize))}
 };
 
+let keyTyped = ({editing} as state, env) => {
+  {...state, editing: Option.map(editing, ~f=(e => {...e, code: Editor.keyTyped(e.code, env)}))}
+};
 
-module Option = {
-  type t('a) = option('a);
-  let iter = (t, ~f) => switch (t) {
-    | None => ()
-    | Some(a) => f(a)
+let drawBg = (offset: Point.t(float), grid, sprites, env) => {
+  Array.iteri(
+    (x, col) =>
+      Array.iteri(
+        (y, tile) =>
+          {
+            let tileOffset = Point.Int.(create(tileSize * x, tileSize * y)) |> Point.map(~f=float_of_int);
+            let pos = Point.Float.(tileOffset + offset);
+            switch (tile) {
+          | `Unknown => Sprite.draw(sprites, ~name="unknown", ~pos, env);
+          | `Floor => Sprite.draw(sprites, ~name="floor", ~pos, env);
+          | `Wall(kind) => Sprite.draw(sprites, ~name="wall_" ++ kind, ~pos, env);
+          | `Nothing => ()
+          }},
+        col,
+      ),
+    grid,
+  );
+};
+
+let pointCollides = (pt, grid) => {
+  let tilePt : Point.t(int) = Point.Int.(ofFloatPt(pt) /@ tileSize);
+  switch (Array.get(grid, tilePt.x)) {
+    | col => switch (Array.get(col, tilePt.y)) {
+      | `Wall(_) => true
+      | _ => false
+      | exception Invalid_argument(_) => true
+    }
+    | exception Invalid_argument(_) => true
   }
 };
 
-let constrainCursor = (lines, (row, col)) => {
-  let row = max(0, min(Array.length(lines) - 1, row));
-  let rowContents = Array.get(lines, row);
-  let col = max(0, min(String.length(rowContents), col));
-  (row, col)
-};
+let calcPosition = (player, grid, env) : Point.t(float) => {
+  let speed = 3.;
 
-let updateLines = (~lines, ~cursor, f) => {
-  let linesLength = Array.length(lines);
-  let (row, col) = constrainCursor(lines, cursor);
-  let (before, after) = {
-    let rowContents = try (Array.get(lines, row)) {
-      | Invalid_argument(_) => failwith("Invalid row somehow " ++ string_of_int(row));
-    };
-    let rLen = String.length(rowContents);
-    let before = String.sub(rowContents, 0, col);
-    let after = String.sub(rowContents, col, rLen - col);
-    (before, after)
+  let xOffset = (Env.key(Right, env) || Env.key(D, env) ? speed : 0.);
+  let yOffset = (Env.key(Up, env) || Env.key(W, env) ? -. speed : 0.);
+  let xOffset = xOffset +. (Env.key(Left, env) || Env.key(A, env) ? -. speed : 0.);
+  let yOffset = yOffset +. (Env.key(Down, env) || Env.key(S, env) ? speed : 0.);
+
+  let newPos = Point.Float.(player + create(xOffset, yOffset));
+  let newXPos = Point.Float.(player + create(xOffset, 0.));
+  let newYPos = Point.Float.(player + create(0., yOffset));
+
+  let noCollision = p => {
+    let tsf = float_of_int(tileSize);
+    !pointCollides(p, grid) &&
+    !pointCollides(Point.Float.(p + create(tsf, 0.)), grid) &&    
+    !pointCollides(Point.Float.(p + create(0., tsf)), grid) &&    
+    !pointCollides(Point.Float.(p +@ tsf), grid)
   };
-  switch (f(before, after)) {
-    | `Delete(addToPreviousLine) =>
-      // remove row
-      let newLines = if (linesLength > 1) {
-        let newLines = Array.make(linesLength - 1, "");
-        Array.blit(lines, 0, newLines, 0, row);
-        Array.blit(lines, row + 1, newLines, row, linesLength - row - 1);
-        newLines
-      } else {
-        [|""|]
-      };
-      let prevRow = max(0, row - 1);
-      let prevRowContents = Array.get(newLines, prevRow);
-      Array.set(newLines, prevRow, prevRowContents ++ addToPreviousLine);
-      (newLines, (prevRow, String.length(prevRowContents)))
-    
-    | `Edit(before, after) =>
-      // update row
-      let newString = before ++ after;
-      Array.set(lines, row, newString);
-      (lines, (row, String.length(before)))
-    
-    | `Split(changedRow, newRow, indent) =>
-      // Edit and add row
-      let indentStr = String.make(indent, ' ');
-      let newLines = Array.make(linesLength + 1, "");
-      Array.blit(lines, 0, newLines, 0, row);
-      Array.set(newLines, row, changedRow);
-      Array.set(newLines, row + 1, indentStr ++ newRow);
-      Array.blit(lines, row + 1, newLines, row + 2, linesLength - row - 1);
-      (newLines, (row + 1, indent))
-  }
-};
 
-let rec countLeadingSpaces = (s, i) => {
-  if (i < String.length(s) - 1 && String.get(s, i) == ' ') {
-    countLeadingSpaces(s, i + 1)
+  if (noCollision(newPos)) {
+    newPos
+  } else if (noCollision(newXPos)) {
+    newXPos
+  } else if (noCollision(newYPos)) {
+    newYPos
   } else {
-    i
+    player
   }
 };
 
-// TODO: select mode
-// addChar -> delete selection, add char
-// delete/backspace -> delete selection
-// enter -> delete selection, split
-// arrow -> de-select (different end location per arrow!)
-// arrow + shift -> select more or less...
-// 
-// Either:
-// - cursor manipulation
-// - delete and then do stuff
-// OR TAB/Shift-tab
-
-module Location = {
-  type t = {
-    row: int,
-    col: int
+let getCloseRobot({player, robots}, closeDist) = {
+  let dist = (r: Robot.t) => Point.Float.(mag(player - r.pos));
+  let rec getClosestRobot = (l, acc) => {
+    switch (l, acc) {
+      | ([hd, ...tl], None) =>
+        getClosestRobot(tl, Some((hd, dist(hd))))
+      | ([hd, ...tl], Some((_, crd))) when dist(hd) < crd =>
+        getClosestRobot(tl, Some((hd, dist(hd))))
+      | ([_, ...tl], acc) =>
+        getClosestRobot(tl, acc)
+      | ([], Some((robot, _))) => Some(robot)
+      | ([], None) => None
+    }
   };
-
-  let constrain = (lines, {row, col}) => {
-    let row = max(0, min(Array.length(lines) - 1, row));
-    let rowContents = Array.get(lines, row);
-    let col = max(0, min(String.length(rowContents), col));
-    {row, col}
+  switch (getClosestRobot(robots, None)) {
+    | Some(robot) as r when dist(robot) < closeDist => r
+    | _ => None
   };
-
-  let (<) = (a, b) =>
-    a.col < b.col || (a.col == b.col && a.row < b.row);
-    
-}
-
-type cursor =
-  [ `Normal(location)
-  | `Select(location, location)];
-
-let deleteSelection = (lines, `Select(firstLoc, lastLoc)) => {
-  let firstLoc = constrainLocation(lines, firstLoc);
-  let lastLoc = constrainLocation(lines, lastLoc);
-  let lengthLines
-  let newLines = Array.make(linesLength - 1, "");
-  Array.blit(lines, 0, newLines, 0, row);
-  Array.blit(lines, row + 1, newLines, row, linesLength - row - 1);
-  newLines
-  // TODO delete rows between
-  // TODO delete after leftloc
-  // TODO delete before rightloc
 };
 
-// let handleSelect = (key, lines, selectDir, leftLoc, rightLoc) => {
-//   switch (key) {
-//     | `Letter(c) => ()
-//     | _ => ()
-//   }
-// };
-
-let keyTyped = ({lines, cursor} as state, env) => {
-  let updateLines = updateLines(~lines, ~cursor);
-  let addChar = (c) => updateLines((before, after) => `Edit(before ++ String.make(1, c), after));
-  let (lines, cursor) = switch (Key.kind(Env.keyCode(env))) {
-    | `Letter(c) when Key.modifier(`Shift, env) => addChar(Char.uppercase(c))
-    | `Letter(c) => addChar(c)
-    | `Num(n) when Key.modifier(`Shift, env) => 
-      let shiftNumbers = [|')', '!', '@', '#', '$', '%', '^', '&', '*', '('|];
-      addChar(Array.get(shiftNumbers, n))
-    | `Num(n) => addChar(String.get(string_of_int(n), 0))
-    | `Tab => updateLines((before, after) => `Edit(before ++ "  ", after));
-    | `Space => addChar(' ')
-    | `Enter =>
-      // Regular: updateLines((before, after) => `Split(before, after));
-      updateLines((before, after) => {
-        let leading = countLeadingSpaces(before, 0);
-        `Split(before, after, leading)
-        });
-      
-    | `Backspace =>
-      updateLines(
-        (before, after) => before == "" ? 
-          `Delete(after) : 
-          `Edit(String.sub(before, 0, String.length(before) - 1), after));
-    | `Delete => 
-      updateLines(
-        (before, after) =>
-          `Edit(before, after == "" ? "" :
-            String.sub(after, 1, String.length(after) - 1)))
-    | `Arrow(dir) => 
-      let (row, col) = cursor;
-      let (rowOffset, colOffset) = switch (dir) {
-        | `Left => (0, -1)
-        | `Right => (0, 1)
-        | `Up => (-1, 0)
-        | `Down => (1, 0)
-      };
-      (lines, constrainCursor(lines, (row + rowOffset, col + colOffset)))
-    | `Quote as e
-    | `Comma as e
-    | `Minus as e
-    | `Period as e
-    | `Slash as e
-    | `Semicolon as e
-    | `Equals as e
-    | `OpenBracket as e
-    | `CloseBracket as e
-    | `Backslash as e
-    | `Backtick as e =>
-      let (normal, shifted) = Key.symbols(e);
-      addChar(Key.modifier(`Shift, env) ? shifted : normal) 
-    | _ => 
-      print_endline("Unknown key");
-      (lines, cursor)
-  };
-
-  {...state, lines, cursor}
-};
 
 let draw = (state, env) => {
-  Draw.background(Constants.white, env);
-  
-  Draw.fill(Utils.color(~r=0, ~g=0, ~b=0, ~a=100), env);
-  let row = fst(state.cursor);
-  let beforeText = String.sub(Array.get(state.lines, row), 0, snd(state.cursor));
-  let w = Draw.textWidth(~body=beforeText, env);
-  Draw.rect(~pos=(w + 11, 30 * row), ~width=15, ~height=30, env);
+  let center = Point.create(Env.width(env) / 2, Env.height(env) / 2) |> Point.map(~f=float_of_int);  
+  let closeRobot = getCloseRobot(state, float_of_int(tileSize));
 
-  Array.iteri((i, str) => Draw.text(~body=str, ~pos=(10, 30 * i), env),
-    state.lines);
+  switch (state.editing) {
+    | Some(robot) =>
+      let pad = 20;
+      let rect : Editor.rect = {
+        x: Env.width(env) / 3 * 2,
+        y: pad,
+        w: Env.width(env) / 3,
+        h: Env.height(env) - pad - pad
+      };
+      Editor.draw(rect, Constants.white, robot.code, state.font, env);
+    | None =>
+      Draw.background(Constants.black, env);
+      Draw.tint(Constants.white, env);
+      drawBg(Point.Float.(center - state.player), state.map, state.sprites, env);
+      List.iter((robot : Robot.t) => 
+        {
+          let isClose = closeRobot
+            |> Option.map(~f=(close : Robot.t) => close.id == robot.id)
+            |> Option.get(~default=false);
 
-  state
+          Draw.tint(isClose ? Utils.color(~r=150, ~g=150, ~b=150, ~a=255) : Constants.white, env);
+          Sprite.draw(state.sprites, ~name="robot", ~pos=Point.Float.(center - state.player + robot.pos), env)
+        },
+        state.robots);
+      Draw.tint(Constants.white, env);
+      Sprite.draw(state.sprites, ~name="player", ~pos=center, env);
+  };
+
+  let (editing, robots) = switch (state.editing){
+    | Some(curr : Robot.t) when Env.keyReleased(Escape, env) =>
+      (None, List.map((r : Robot.t) => r.id == curr.id ? curr : r, state.robots))
+    | None when Env.keyReleased(Enter, env) => (closeRobot, state.robots)
+    | _ => (state.editing, state.robots)
+  };
+
+  // let robots = List.map(
+  //   robot => {
+  //     // Check if collision
+  //   },
+  //   state.robots
+  // );
+
+  let player = switch (state.editing) {
+    | Some(_) => state.player
+    | None => calcPosition(state.player, state.map, env)
+  };
+
+
+  {...state, editing, time: state.time +. Env.deltaTime(env), player, robots}
 };
 
 run(~setup, ~draw, ~keyTyped, ());
