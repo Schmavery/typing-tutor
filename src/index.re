@@ -3,6 +3,7 @@ open Printf;
 open Std;
 
 let tileSize = 32;
+let tileSizef = float_of_int(32);
 
 module Robot = {
   type t = {
@@ -91,11 +92,10 @@ let calcPosition = (player, grid, env) : Point.t(float) => {
   let newYPos = Point.Float.(player + create(0., yOffset));
 
   let noCollision = p => {
-    let tsf = float_of_int(tileSize);
     !pointCollides(p, grid) &&
-    !pointCollides(Point.Float.(p + create(tsf, 0.)), grid) &&    
-    !pointCollides(Point.Float.(p + create(0., tsf)), grid) &&    
-    !pointCollides(Point.Float.(p +@ tsf), grid)
+    !pointCollides(Point.Float.(p + create(tileSizef, 0.)), grid) &&    
+    !pointCollides(Point.Float.(p + create(0., tileSizef)), grid) &&    
+    !pointCollides(Point.Float.(p +@ tileSizef), grid)
   };
 
   if (noCollision(newPos)) {
@@ -132,7 +132,7 @@ let getCloseRobot({player, robots}, closeDist) = {
 
 let draw = (state, env) => {
   let center = Point.create(Env.width(env) / 2, Env.height(env) / 2) |> Point.map(~f=float_of_int);  
-  let closeRobot = getCloseRobot(state, float_of_int(tileSize));
+  let closeRobot = getCloseRobot(state, tileSizef);
 
   switch (state.editing) {
     | Some(robot) =>
@@ -148,13 +148,14 @@ let draw = (state, env) => {
       Draw.background(Constants.black, env);
       Draw.tint(Constants.white, env);
       drawBg(Point.Float.(center - state.player), state.map, state.sprites, env);
+      let robotTintColor = Utils.color(~r=150, ~g=150, ~b=150, ~a=255);
       List.iter((robot : Robot.t) => 
         {
           let isClose = closeRobot
             |> Option.map(~f=(close : Robot.t) => close.id == robot.id)
             |> Option.get(~default=false);
 
-          Draw.tint(isClose ? Utils.color(~r=150, ~g=150, ~b=150, ~a=255) : Constants.white, env);
+          Draw.tint(isClose ? robotTintColor : Constants.white, env);
           Sprite.draw(state.sprites, ~name="robot", ~pos=Point.Float.(center - state.player + robot.pos), env)
         },
         state.robots);

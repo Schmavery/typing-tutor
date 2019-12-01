@@ -75,6 +75,8 @@ let modifier = (key, env) => {
     };
 }
 
+type symbols = [ `Quote | `Comma | `Minus | `Period | `Slash | `Semicolon | `Equals | `OpenBracket | `CloseBracket | `Backslash | `Backtick ];
+
 let symbols = fun
   | `Quote => ('\'', '"')
   | `Comma => (',', '<')

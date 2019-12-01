@@ -116,32 +116,21 @@ let getTypedChar = (key, shift) => switch (key) {
       Array.get(shiftNumbers, n)
   | `Num(n) => String.get(string_of_int(n), 0)
   | `Space => ' '
-  | `Quote as k
-  | `Comma as k
-  | `Minus as k
-  | `Period as k
-  | `Slash as k
-  | `Semicolon as k
-  | `Equals as k
-  | `OpenBracket as k
-  | `CloseBracket as k
-  | `Backslash as k
-  | `Backtick as k =>
+  | #Key.symbols as k =>
     let (normal, shifted) = Key.symbols(k);
     shift ? shifted : normal
 };
+
+type addChar = [`Letter(char) | `Num(int) | `Space | `Quote | `Comma | `Minus | `Period | `Slash |
+`Semicolon | `Equals| `OpenBracket | `CloseBracket | `Backslash | `Backtick ];
+
 
 let keyTyped = ({lines, cursor} as state, env) => {
   let updateLines = updateLines(~lines, ~cursor);
   let addChar = (c) => updateLines((before, after) => `Edit(before ++ String.make(1, c), after));
   let key = Key.kind(Env.keyCode(env));
   let (lines, cursor) = switch (key) {
-    | `Letter(_) as k | `Num(_) as k | `Space as k 
-    | `Quote as k | `Comma as k | `Minus as k | `Period as k
-    | `Slash as k | `Semicolon as k | `Equals as k
-    | `OpenBracket as k | `CloseBracket as k | `Backslash as k
-    | `Backtick as k => addChar(getTypedChar(k, Key.modifier(`Shift, env)));
-
+    | #addChar as k => addChar(getTypedChar(k, Key.modifier(`Shift, env)));
     | `Tab => updateLines((before, after) => `Edit(before ++ "  ", after));
     | `Enter =>
       updateLines((before, after) => {
